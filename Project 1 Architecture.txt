@@ -1,0 +1,103 @@
+@startuml
+skinparam linetype ortho
+skinparam rectangle {
+  Shadowing false
+}
+title Foundation Platform - Architecture Overview (Project 1 scope)
+
+' Control plane / operator tools
+package "Control Plane / Operator Tools" {
+  rectangle "Terraform CLI\n(local / CI runner)" as TFCLI
+  rectangle "Terraform Cloud\n(workspaces per env,\nremote backend, state lock,\npolicy checks)" as TFC
+  rectangle "AWS CLI / CloudShell\n(operator actions)" as AWSCLI
+}
+
+' IaC comparison
+package "IaC Comparison" {
+  rectangle "Terraform (primary)\nmodules: vpc, ec2, s3, iam" as TF_MODULES
+  rectangle "CloudFormation (demo)\nsmall stack: S3 + IAM" as CF_DEMO
+}
+
+' AWS account / region (main infra)
+package "AWS Account / Region" {
+  package "VPC (Multi-AZ)" {
+    node "AZ-A\nPublic Subnet\n(IGW, Bastion)" as AZA_PUB
+    node "AZ-A\nPrivate Subnet\n(EC2)" as AZA_PRIV
+    node "AZ-B\nPublic Subnet\n(NAT Gateway)" as AZB_PUB
+    node "AZ-B\nPrivate Subnet\n(EC2)" as AZB_PRIV
+    rectangle "NAT Gateway\n(in Public Subnet)" as NAT
+    rectangle "Internet Gateway (IGW)" as IGW
+  }
+
+  rectangle "S3\n(versioning, SSE/KMS, lifecycle)" as S3
+  rectangle "IAM\n(roles, instance profiles,\nleast-privilege)" as IAM
+  rectangle "CloudTrail\n(logging to S3)" as CLOUDTRAIL
+  rectangle "KMS (key for S3/state)" as KMS
+}
+
+rectangle "Billing & Cost Mgmt\n(Cost Explorer, Budgets, Alerts)" as BILLING
+rectangle "Tag & Policy Enforcement\n(TF Cloud policies / AWS Org tag policies)" as POLICIES
+
+' Control flows
+TFCLI --> TFC : run / plan / apply
+AWSCLI --> TFCLI : invoke / debug
+TFC --> "AWS Account / Region" : apply / provisions
+AWSCLI --> "AWS Account / Region" : operator API calls
+CF_DEMO --> "AWS Account / Region" : demo deploy / drift detect
+
+' Provisioning relationships
+TFC --> AZA_PUB : provisions
+TFC --> AZA_PRIV : provisions
+TFC --> AZB_PUB : provisions
+TFC --> AZB_PRIV : provisions
+TFC --> S3
+TFC --> IAM
+
+' Networking & NAT routing
+AZA_PRIV --> NAT : route via NAT (private -> NAT)
+AZB_PRIV --> NAT : route via NAT (private -> NAT)
+NAT --> IGW : outbound to Internet
+AZA_PUB --> IGW : IGW attachment / public routes
+
+' Service relationships
+AZA_PRIV --> S3 : access (IAM role)
+AZB_PRIV --> S3 : access (IAM role)
+AZA_PRIV --> IAM : instance profile
+AZB_PRIV --> IAM : instance profile
+
+' Logging & encryption
+CLOUDTRAIL --> S3 : logs stored (encrypted)
+KMS --> S3 : encryption key
+KMS --> "Terraform Cloud" : (state encryption key reference - optional)
+
+' Billing & policies
+S3 --> BILLING : tagged for cost allocation
+IAM --> BILLING : audit / tags
+AZA_PRIV --> BILLING : resource cost (EC2)
+AZB_PRIV --> BILLING : resource cost (EC2)
+POLICIES --> TFC : policy checks on plan/apply
+POLICIES --> "AWS Account / Region" : org tag policies / SCPs
+
+' IaC links
+TF_MODULES --> TFC
+CF_DEMO --> TFC : optional orchestration
+
+' Notes: workspaces and tags
+note left of TFC
+Workspaces:
+
+dev (low-cost)
+qa (prod-like)
+prod (hardened) State locking & remote backend enabled 
+end note
+
+' Notes: workspaces and tags
+note right of BILLING
+back:
+
+Project
+Environment
+Owner
+CostCenter
+end note
+@enduml
